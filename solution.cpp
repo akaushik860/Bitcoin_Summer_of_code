@@ -1,135 +1,118 @@
-#include<bits/stdc++.h>
+#include  <iostream>
+#include  <bits/stdc++.h>
+#include  <vector>
+#include  <algorithm>
+#include  <set>
+#include  <map>
 
 using namespace std;
 
-#define ll long long int
+set<string> included_tx_id; 
 
-unordered_map<string,vector<string>> txp; // to store key(txids) value(array of parent_txids) pairs in map
-unordered_map<string,pair<ll,ll>> txwf; // to store (txids,(fee,weight)) pairs
-set<string> visited; // to keep track of txids which we already have considered
-vector<pair<string,vector<string>>> vect; // to store txp map in descending order of the parent_txids array size.
+string fileName = "mempool.csv";
+double maxweight = 4000000.0;
 
-ll W = 4000000; // maximum block weight
+class Transaction
+{
+public:
+    string tx_id;
+    vector<string> parents;
+    int fee;
+    int weight;
+};
 
-// function to get different parent txids from the file
-vector<string> getParent(string s){
-    vector<string> Parents;
-    int start = 0, end=s.find(";");
-    while(end != -1){
-        Parents.push_back(s.substr(start,end - start));
-        start = end + 1;
-        end = s.find(";", start);
+pair<string, Transaction *> createTransaction(vector<string> &row)
+{
+    auto ans = new Transaction();
+    ans->tx_id = row[0];
+    ans->fee = stoi(row[1]);
+    ans->weight = stoi(row[2]);
+    vector<string> p;
+    for (int i = 3; i < row.size(); i++)
+    {
+        p.push_back(row[i]);
     }
-    Parents.push_back(s.substr(start,end - start));
-
-    return Parents;
+    ans->parents = p;
+    return {row[0], ans};
 }
 
-// function to convert string to interger values of weight and fee.
-ll stringToInt(string s){
-    ll x;
-    stringstream geek(s);
-    geek >> x;
-    return x;
+void readCSV(string fileName, unordered_map<string, Transaction *> &umap)
+{
+    ifstream fin(fileName);
+    vector<string> row;
+    string temp, line, word;
+    getline(fin, line);
+    while (getline(fin, line))
+    {
+        row.clear();
+        stringstream s(line);
+        while (getline(s, word, ','))
+        {
+            row.push_back(word); 
+        }
+        pair<string, Transaction *> p = createTransaction(row);
+        umap[p.first] = p.second;
+    }
+    fin.close();
+    cout << "Total number of transactions read: " << umap.size() << endl;
 }
 
-// function comp which helps in sorting txp map in descending order of their parent-array-size
-bool comp(pair<string,vector<string>>&a, pair<string,vector<string>>&b){
-    return a.second.size() > b.second.size();
+bool isValidTx(Transaction *tx, set<string> &included_tx_set)
+{
+    for (auto parent : tx->parents)
+    {
+        if (included_tx_set.find(parent) == included_tx_set.end())
+            return false;
+    }
+    return true;
 }
-
+void writeOutput(vector<string> &included_tx_vector, string fn)
+{
+    ofstream myfile(fn);
+    for (auto s : included_tx_vector)
+        myfile << s << endl;
+    myfile.close();
+}
 int main()
 {
-    ifstream ip("mempool.csv");
-
-    string txid, fee, Weight, parent, first;
-
-    getline(ip,first,'\n');
-    ll i=0;
-    while(ip.good()){
-
-        txid.clear();
-        fee.clear();
-        Weight.clear();
-        parent.clear();
-
-        getline(ip,txid,',');
-        getline(ip,fee,',');
-        getline(ip,Weight,',');
-        getline(ip,parent,'\n');
-
-        // adding txid , fee, weight in a single map.
-        if(!fee.empty())
+    unordered_map<string, Transaction *> umap;
+    readCSV(fileName, umap);
+    set<pair<float, Transaction *>, greater<pair<float, Transaction *>>> tx_set; 
+    set<string> included_tx_set;                                                 
+    vector<string> included_tx_vector;                                           
+    for (auto p : umap)
+    {
+        tx_set.insert({(float)p.second->fee / (float)p.second->weight, p.second});
+    }
+    double currBlockWeight = 0.0;
+    int totalFee = 0;
+    while (!tx_set.empty() && currBlockWeight < maxweight)
+    {
+        bool found = false;
+        for (auto itr = tx_set.begin(); itr != tx_set.end(); itr++)
+        {
+            Transaction *curr_tx = (*itr).second;
+            int currFee = curr_tx->fee;
+            int currWeight = curr_tx->weight;
+            if (isValidTx(curr_tx, included_tx_set) && (currBlockWeight + currWeight) <= maxweight)
             {
-                txwf.insert(make_pair(txid,make_pair(stringToInt(fee),stringToInt(Weight))));
+                currBlockWeight += currWeight;
+                included_tx_set.insert(curr_tx->tx_id);
+                included_tx_vector.push_back(curr_tx->tx_id);
+                totalFee = totalFee+currFee;
+                tx_set.erase(itr);
+                found = true;
+                break;
             }
-
-        // adding txid and parents array (if exist)
-        vector<string> Parents;
-        if(parent.empty()&&!fee.empty()){
-            txp.insert(make_pair(txid,Parents));
         }
-        else{
-            Parents = getParent(parent);
-            txp.insert(make_pair(txid,Parents));
-        }
-
+        if (!found)
+            break;
     }
-    txp.erase("");
-    ip.close();
-
-    // to sort txp map on basis of parent-array-size in descending order.
-    for(auto i : txp) vect.push_back(i);
-    sort(vect.begin(),vect.end(),comp);
-
-    // main solution to get desirable txids and print them in block.txt file
-    // the approach implemented is that start from that txid which has maximum number of parents_txid
-    // and then check its parents whether they has any parent or not.
-    // it is similar to bfs but here we will start from the node which has maximum number of 
-    // parent transactions and will track the order using eleQ & ans side by side so that
-    // parent transaction can come before the its children transaction.
-    ofstream f;
-    f.open("block.txt",ios::out);
-
-    ll total_weight = 0;
-    
-    for(auto i : vect){
-        if(visited.find(i.first)==visited.end()){
-            ll local_weight = 0;
-            set<string> eleQ;
-            vector<string> ans;
-            queue<string> q;
-            q.push(i.first);
-            eleQ.insert(i.first);
-            auto fw = txwf.find(i.first);
-            local_weight += fw->second.second;
-            ans.push_back(i.first);
-            while(!q.empty()){
-                string k = q.front();
-                q.pop();
-                if(visited.find(k)==visited.end()){
-                    visited.insert(k);
-                    auto itr = txp.find(k);
-                    for(auto op : itr->second){
-                        if(eleQ.find(op)==eleQ.end()&&visited.find(op)==visited.end()) {
-                            eleQ.insert(op);
-                            ans.push_back(op);
-                            auto FW = txwf.find(op);
-                            local_weight += FW->second.second;
-                            q.push(op);
-                        }
-                    }
-                }
-            }
-            if(local_weight + total_weight < W){
-                total_weight += local_weight;
-                for (auto it = ans.rbegin(); it != ans.rend(); ++it){
-                    f << *it << endl;
-                }
-            }
-        }
-    }
-    // cout<<total_weight;
-    f.close();
-    return 0;
+    cout << "Number of tx in final block " << included_tx_set.size() << "\n";
+    cout << "Total fee in curr block : " << totalFee<<"\n";
+    cout << "Total weight : " << currBlockWeight<<"\n";
+    double percentage=(currBlockWeight/maxweight)*100.0;
+    cout<<"Percentage of weight: "<<percentage<<" %"<<"\n";
+    cout<<"\n";
+    writeOutput(included_tx_vector, "block.txt");
 }
